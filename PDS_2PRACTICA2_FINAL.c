@@ -31,15 +31,20 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+#include "MK64F12.h"
+#include "peripherals.h"
 #include "fsl_debug_console.h"
 #include "board.h"
 #include "fsl_adc16.h"
 #include "fsl_dac.h"
 #include "pin_mux.h"
 #include "clock_config.h"
+#include "fsl_port.h"
 /*******************************************************************************
  * Definitions
  ******************************************************************************/
+#define PORTA_SWITCH_HANDLER PORTA_IRQHandler
+#define PORTC_SWITCH_HANDLER PORTC_IRQHandler
 #define DEMO_ADC16_BASE 			ADC0
 #define DEMO_ADC16_CHANNEL_GROUP 	0U
 #define HALF_OFFSET					2047
@@ -57,10 +62,16 @@ typedef enum{
 /*******************************************************************************
  * Prototypes
  ******************************************************************************/
-
+void turn_leds_off(void);
+void turn_red_led_on(void);
+void turn_green_led_on(void);
+void turn_blue_led_on(void);
 /*******************************************************************************
  * Constant Variables
  ******************************************************************************/
+volatile bool sw2 = false;
+volatile bool sw3 = false;
+
 static const float lowpass_filter_response[SAMPLES_PER_MEASURE] =
 { 0.07840464525404556, 0.17707825519483075, 0.22014353249171387,
         0.2759015644497544, 0.22014353249171387, 0.17707825519483075,
@@ -70,6 +81,35 @@ static const float highpass_filter_response[SAMPLES_PER_MEASURE] =
 { -0.08857280384687653, -0.20001387909943527, -0.13289448474069163,
         0.7755518089951376, -0.13289448474069163, -0.20001387909943527,
         -0.08857280384687653 };
+
+static uint8_t index1;
+static float resolution1 = 1.0;
+static float lowpass_filter_modified[7];
+
+static uint8_t index2;
+static float resolution2 = 1.0;
+static float highpass_filter_modified[7];
+/*******************************************************************************
+ * Handlers
+ ******************************************************************************/
+void PORTA_SWITCH_HANDLER()
+{
+
+    /*Limpiamos la bandera del pin que causo la interrupcion*/
+    PORT_ClearPinsInterruptFlags(PORTA, 1 << 4);
+
+    /*Si state es igual a 0 entonces se hace 1 y al revÃ©s*/
+    sw2 = true;
+}
+
+void PORTC_SWITCH_HANDLER()
+{
+
+    /*Limpiamos la bandera del pin que causo la interrupcion*/
+    PORT_ClearPinsInterruptFlags(PORTC, 1 << 6);
+
+    sw3 = true;
+}
 /*******************************************************************************
  * Main Function
  ******************************************************************************/
@@ -96,6 +136,59 @@ int main(void)
     BOARD_InitPins();
     BOARD_BootClockRUN();
     BOARD_InitDebugConsole();
+    /*******************************************************************************
+     * Switches and Leds Config
+     ******************************************************************************/
+    /*Habilitar el reloj SCG*/
+        CLOCK_EnableClock(kCLOCK_PortB);
+        CLOCK_EnableClock(kCLOCK_PortA);
+        CLOCK_EnableClock(kCLOCK_PortE);
+        CLOCK_EnableClock(kCLOCK_PortC);
+
+        /*Configurar el puerto para encender un LED*/
+        /* Input pin PORT configuration */
+        port_pin_config_t config_led = {
+                kPORT_PullDisable,              /*Resistencias deshabilitadas*/
+                kPORT_SlowSlewRate,             /*SlewRate menor velocidad*/
+                kPORT_PassiveFilterDisable,      /*Filtro habilitado*/
+                kPORT_OpenDrainDisable,         /**/
+                kPORT_LowDriveStrength,         /**/
+                kPORT_MuxAsGpio,                /*Modo GPIO*/
+                kPORT_UnlockRegister };         /**/
+
+        /* Input pin PORT configuration */
+        port_pin_config_t config_switch = {
+                kPORT_PullDisable,
+                kPORT_SlowSlewRate,
+                kPORT_PassiveFilterDisable,
+                kPORT_OpenDrainDisable,
+                kPORT_LowDriveStrength,
+                kPORT_MuxAsGpio,
+                kPORT_UnlockRegister};
+
+        PORT_SetPinInterruptConfig(PORTA, 4, kPORT_InterruptFallingEdge);
+        PORT_SetPinInterruptConfig(PORTC, 6, kPORT_InterruptFallingEdge);
+
+        /* Sets the configuration */
+        PORT_SetPinConfig(PORTB, 21, &config_led);
+        PORT_SetPinConfig(PORTB, 22, &config_led);
+        PORT_SetPinConfig(PORTE, 26, &config_led);
+        PORT_SetPinConfig(PORTA, 4, &config_switch);
+        PORT_SetPinConfig(PORTC, 6, &config_switch);
+
+    NVIC_EnableIRQ(PORTA_IRQn);
+    NVIC_EnableIRQ(PORTC_IRQn);
+
+    gpio_pin_config_t led_config = { kGPIO_DigitalOutput, 1 };
+    gpio_pin_config_t switch_config = { kGPIO_DigitalInput, 0 };
+
+    /* Sets the configuration */
+    GPIO_PinInit(GPIOA, 4, &switch_config);
+    GPIO_PinInit(GPIOC, 6, &switch_config);
+
+    GPIO_PinInit(GPIOB, 21, &led_config);
+    GPIO_PinInit(GPIOB, 22, &led_config);
+    GPIO_PinInit(GPIOE, 26, &led_config);
 
 	/*******************************************************************************
 	 * ADC CONFIG
@@ -116,6 +209,7 @@ int main(void)
      */
 
     ADC16_GetDefaultConfig(&adc16ConfigStruct);
+    adc16ConfigStruct.clockDivider = kADC16_ClockDivider4;
     ADC16_Init(DEMO_ADC16_BASE, &adc16ConfigStruct);
 
     /* Make sure the software trigger is used. */
@@ -165,6 +259,42 @@ int main(void)
 
    	for(;;)
     {
+        if (true == sw2)
+        {
+            sw2 = false;
+            turn_leds_off();
+            turn_red_led_on();
+
+            if (1.0 == resolution1)
+            {
+                resolution1 = 0.0;
+            }
+            for (index1 = 0; 7 > index1 ; index1++)
+            {
+                lowpass_filter_modified[index1] =
+                        lowpass_filter_response[index1] * resolution1;
+            }
+            resolution1 += 0.1;
+
+        }
+        else if (true == sw3)
+        {
+            sw3 = false;
+            turn_leds_off();
+            turn_blue_led_on();
+
+            if (1.0 == resolution2)
+            {
+                resolution2 = 0.0;
+            }
+            for (index2 = 0; 7 > index2 ; index2++)
+            {
+                highpass_filter_modified[index2] =
+                        highpass_filter_response[index2] * resolution2;
+            }
+            resolution2 += 0.1;
+
+        }
 		/*
 		 When in software trigger mode, each conversion would be launched once calling the "ADC16_ChannelConfigure()"
 		 function, which works like writing a conversion command and executing it. For another channel's conversion,
@@ -231,4 +361,27 @@ int main(void)
 		dac_out = START_ZERO;
 
 	}
+}
+
+void turn_leds_off(void)
+{
+    GPIO_SetPinsOutput(GPIOB, 1 << 21);
+    GPIO_SetPinsOutput(GPIOB, 1 << 22);
+    GPIO_SetPinsOutput(GPIOE, 1 << 26);
+}
+
+void turn_red_led_on(void)
+{
+    turn_leds_off();
+    GPIO_ClearPinsOutput(GPIOB, 1 << 22);
+}
+void turn_green_led_on(void)
+{
+    turn_leds_off();
+    GPIO_ClearPinsOutput(GPIOE, 1 << 26);
+}
+void turn_blue_led_on(void)
+{
+    turn_leds_off();
+    GPIO_ClearPinsOutput(GPIOB, 1 << 21);
 }
