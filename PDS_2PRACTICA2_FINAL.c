@@ -331,11 +331,11 @@ int main(void)
          * based on the filter response
          */
 		for (n = START_ZERO; SAMPLES_PER_MEASURE > n; n++) {
-			y1_out_lowpass += lowpass_filter_response[n] * (float) audio_signal[n];
+			y1_out_lowpass += lowpass_filter_modified[n] * (float) audio_signal[n];
 		}
 
 		for (n = START_ZERO; SAMPLES_PER_MEASURE > n; n++) {
-			y2_out_highpass += highpass_filter_response[n] * (float) audio_signal[n];
+			y2_out_highpass += highpass_filter_modified[n] * (float) audio_signal[n];
 		}
 
 
